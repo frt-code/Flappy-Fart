@@ -598,7 +598,7 @@ function drawOverlayCard(){
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
 
-  const title = (state === "dead") ? "GAME OVER" : "FLAPPY FART";
+  const title = (state === "dead") ? "OUT OF GAS" : "FLAPPY FART";
   ctx.font = "44px system-ui,-apple-system,Arial";
   ctx.fillText(title, W/2, card.y + 28);
 
@@ -662,7 +662,7 @@ function drawGlobalLeaderboard(card){
   }
 
   ctx.textAlign = "left";
-  for(let i=0;i<10;i++){
+  for(let i=0;i<5;i++){
     const row = globalBoard[i];
     const name = row ? row.name : "—";
     const val = row ? row.score : "—";
