@@ -136,36 +136,44 @@ const ctx = canvas.getContext("2d");
 
 // ---------- Audio (simple fart synth) ----------
 let audioCtx = null;
+
+let audioCtx = null;
+
 function fartSound(){
-  try{
-    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const t = audioCtx.currentTime;
+  try {
+    if(!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // required for mobile audio unlock
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().catch(()=>{});
+    }
 
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    const filt = audioCtx.createBiquadFilter();
+
+    const t = audioCtx.currentTime;
 
     osc.type = "square";
     osc.frequency.setValueAtTime(160, t);
     osc.frequency.exponentialRampToValueAtTime(55, t + 0.09);
 
-    filt.type = "lowpass";
-    filt.frequency.setValueAtTime(900, t);
-    filt.frequency.exponentialRampToValueAtTime(180, t + 0.12);
-
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    gain.gain.exponentialRampToValueAtTime(0.7, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
 
-    osc.connect(filt);
-    filt.connect(gain);
+    osc.connect(gain);
     gain.connect(audioCtx.destination);
 
     osc.start(t);
-    osc.stop(t + 0.18);
-  }catch(e){}
-}
+    osc.stop(t + 0.2);
 
+  } catch(e) {
+    console.log("fart sound error", e);
+  }
+}
+  
 // ---------- Helpers ----------
 function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 
