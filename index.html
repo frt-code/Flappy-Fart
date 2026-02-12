@@ -2,875 +2,724 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Flappy Fart</title>
   <style>
-    :root { color-scheme: dark; }
-    html, body {
-      margin: 0; padding: 0;
-      height: 100%;
-      background: #9bd3d6;
-      overflow: hidden;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    :root{
+      --frame:#7ad0d6;
+      --bg:#0e1a14;
     }
-    #wrap {
-      height: 100%;
-      display: grid;
-      place-items: center;
-      background: radial-gradient(1200px 800px at 50% 30%, rgba(255,255,255,0.18), rgba(0,0,0,0.0)),
-                  linear-gradient(#a8dfe2, #79c4c8);
+    html,body{height:100%;margin:0;background:var(--frame);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    body{display:grid;place-items:center;}
+    .wrap{
+      width:min(460px,92vw);
+      aspect-ratio: 9/16;
+      background:rgba(0,0,0,0.15);
+      border-radius:22px;
+      box-shadow: 0 24px 80px rgba(0,0,0,.45);
+      padding:14px;
     }
-    canvas {
-      width: min(92vw, 430px);
-      height: min(92vh, 760px);
-      border-radius: 22px;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.35);
-      background: #102018;
-      touch-action: none;
-    }
-    .hint {
-      position: fixed;
-      left: 12px; bottom: 10px;
-      font-size: 12px;
-      color: rgba(255,255,255,0.75);
-      user-select: none;
-      pointer-events: none;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+    canvas{
+      width:100%;
+      height:100%;
+      border-radius:18px;
+      background:var(--bg);
+      display:block;
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,.06);
+      touch-action: manipulation;
     }
   </style>
 </head>
 <body>
-  <div id="wrap">
-    <canvas id="game" aria-label="Flappy Fart"></canvas>
+  <div class="wrap">
+    <canvas id="c" width="450" height="800"></canvas>
   </div>
-  <div class="hint">Tap / Click / Space to flap</div>
 
 <script>
-(() => {
-  // ---------------------------
-  // Config / Tuning
-  // ---------------------------
-  const TUNING = {
-    // world
-    gravity: 0.42,
-    flapImpulse: -7.6,
+/* =========================
+   Flappy Fart — single file
+   ========================= */
 
-    // pipes
-    pipeW: 82,
-    gap: 172,
-    speed: 2.45,
-    spawnEvery: 1500, // ms between pipes (higher = farther apart)
+const W = 450;
+const H = 800;
 
-    // toilet head (cap) hitbox
-    capW: 108,
-    capH: 64,
-    capInset: 12,   // how far cap overlaps into the gap
+const TUNING = {
+  gravity: 0.52,
+  flapImpulse: -8.8,
 
-    // difficulty bounds
-    safeTop: 92,    // keep clear area below top bar
-    safeBottom: 88, // keep clear area above bottom edge
+  pipeSpeed: 3.35,
+  spawnEvery: 1400,     // ms
+  gap: 210,             // starting gap
+  pipeW: 96,
 
-    // visuals
-    shakeOnDie: 6,
-    puffEvery: 2,    // frames between puffs during flap
-  };
+  // Toilet head (cap) hitboxes
+  capW: 132,
+  capH: 54,
+  capInset: 18,         // bigger = harder (cap extends more into gap)
 
-  const STORAGE = {
-    best: "flappyfart_best_v3",
-    board: "flappyfart_board_v3",
-    name: "flappyfart_name_v3",
-  };
+  // difficulty limits
+  minGap: 150,
+  maxSpeed: 5.4,
 
-  // ---------------------------
-  // Global leaderboard (SheetBest)
-  // ---------------------------
-  const SHEETBEST_URL = "https://api.sheetbest.com/sheets/0815363c-4408-4c6f-a17f-5be927d638de";
+  // fart puffs
+  puffEvery: 70,        // ms while playing
+  puffLife: 720         // ms
+};
 
-  let globalBoard = [];
-  let globalBoardStatus = "loading"; // loading | ready | error
+const UI = {
+  topBarH: 62,
+  cardW: 360,
+  cardH: 360,
+  cardR: 18
+};
 
-  async function fetchGlobalBoard(){
-    globalBoardStatus = "loading";
-    try{
-      const res = await fetch(SHEETBEST_URL, { method: "GET" });
-      const rows = await res.json();
+const STORAGE = {
+  best: "flappyfart_best_v2",
+  board: "flappyfart_board_v2",
+  name: "ff_name_v1",
+};
 
-      globalBoard = (Array.isArray(rows) ? rows : [])
-        .map(r => ({
-          name: (r.name ?? "anon").toString().slice(0, 18),
-          score: Number(r.score ?? 0)
-        }))
-        .filter(r => Number.isFinite(r.score))
-        .sort((a,b) => b.score - a.score)
-        .slice(0, 5);
+// ---------- Global Leaderboard (SheetBest) ----------
+const SHEETBEST_URL = "https://api.sheetbest.com/sheets/0815363c-4408-4c6f-a17f-5be927d638de";
 
-      globalBoardStatus = "ready";
-    } catch(e){
-      globalBoardStatus = "error";
-    }
+let globalBoard = [];
+let globalBoardStatus = "loading";
+
+async function fetchGlobalBoard(){
+  globalBoardStatus = "loading";
+  try{
+    const res = await fetch(SHEETBEST_URL, { cache: "no-store" });
+    const rows = await res.json();
+
+    globalBoard = rows
+      .map(r => ({ name: (r.name || "anon"), score: Number(r.score || 0) }))
+      .filter(r => Number.isFinite(r.score))
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,10);
+
+    globalBoardStatus = "ready";
+  }catch(e){
+    globalBoardStatus = "error";
   }
+}
 
-  async function submitGlobalScore(name, score){
-    // Keep it simple; SheetBest is not secure against cheating. Fine for fun.
-    try{
-      const payload = [{ name: (name || "anon").toString().slice(0,18), score: Number(score)||0, ts: Date.now() }];
-      await fetch(SHEETBEST_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      // refresh list after submit
-      fetchGlobalBoard();
-    } catch(e){}
-  }
-
-  // ---------------------------
-  // Canvas setup (HiDPI)
-  // ---------------------------
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-
-  let W = 420, H = 760;
-  function resize(){
-    const cssW = canvas.getBoundingClientRect().width;
-    const cssH = canvas.getBoundingClientRect().height;
-    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-
-    W = Math.floor(cssW * dpr);
-    H = Math.floor(cssH * dpr);
-
-    canvas.width = W;
-    canvas.height = H;
-
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.imageSmoothingEnabled = true;
-  }
-  new ResizeObserver(resize).observe(canvas);
-  resize();
-
-  // ---------------------------
-  // State
-  // ---------------------------
-  const UI = {
-    topBarH: 56,
-  };
-
-  let state = "ready"; // ready | playing | dead
-  let score = 0;
-  let shake = 0;
-
-  const bird = {
-    x: 0, y: 0,
-    r: 18,
-    v: 0,
-    rot: 0,
-  };
-
-  let pipes = [];
-  let puffs = [];
-  let lastSpawn = 0;
-  let lastFrameTime = performance.now();
-  let puffFrame = 0;
-
-  // ---------------------------
-  // Local leaderboard (top 5)
-  // ---------------------------
-  function getBest(){
-    return Number(localStorage.getItem(STORAGE.best) || 0) || 0;
-  }
-  function setBest(v){
-    localStorage.setItem(STORAGE.best, String(v));
-  }
-
-  function getBoard(){
-    try{
-      const arr = JSON.parse(localStorage.getItem(STORAGE.board) || "[]");
-      return Array.isArray(arr) ? arr : [];
-    } catch(e){
-      return [];
-    }
-  }
-  function setBoard(arr){
-    localStorage.setItem(STORAGE.board, JSON.stringify(arr.slice(0,5)));
-  }
-
-  function submitLocalScore(s){
-    const best = getBest();
-    if(s > best) setBest(s);
-
-    const b = getBoard().map(Number).filter(Number.isFinite);
-    b.push(s);
-    b.sort((a,b)=>b-a);
-    setBoard(b.slice(0,5));
-  }
-
-  function getPlayerName(){
-    let name = (localStorage.getItem(STORAGE.name) || "").trim();
-    if(!name){
-      name = prompt("Name for leaderboard?", "anon") || "anon";
-      name = name.trim().slice(0,18) || "anon";
-      localStorage.setItem(STORAGE.name, name);
-    }
-    return name;
-  }
-
-  // ---------------------------
-  // Collision helpers
-  // ---------------------------
-  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
-
-  function circleRectCollides(cx, cy, cr, rx, ry, rw, rh){
-    const nx = clamp(cx, rx, rx + rw);
-    const ny = clamp(cy, ry, ry + rh);
-    const dx = cx - nx;
-    const dy = cy - ny;
-    return (dx*dx + dy*dy) <= cr*cr;
-  }
-
-  // ---------------------------
-  // Visuals: Sewer background
-  // ---------------------------
-  function drawSewerBackground(){
-    // base
-    ctx.fillStyle = "#173123";
-    ctx.fillRect(0,0,W,H);
-
-    // subtle vignette
-    const g = ctx.createRadialGradient(W*0.5, H*0.2, 40, W*0.5, H*0.2, Math.max(W,H));
-    g.addColorStop(0, "rgba(255,255,255,0.06)");
-    g.addColorStop(1, "rgba(0,0,0,0.45)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
-
-    // bricks
-    const brickH = 44;
-    const brickW = 86;
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "#000";
-    for(let y=0; y<H; y+=brickH){
-      const offset = (Math.floor(y/brickH) % 2) ? brickW*0.45 : 0;
-      for(let x=-brickW; x<W+brickW; x+=brickW){
-        ctx.fillRect(x+offset, y + brickH-3, brickW-10, 2);
-        ctx.fillRect(x+offset + brickW-10, y+6, 2, brickH-10);
-      }
-    }
-    ctx.globalAlpha = 1;
-
-    // slime drips
-    ctx.globalAlpha = 0.10;
-    ctx.fillStyle = "#7dff7d";
-    for(let i=0;i<6;i++){
-      const x = (i/6)*W + (Math.sin((performance.now()/1400)+(i*2))*18);
-      const h = 140 + (i%2)*80;
-      ctx.fillRect(x, UI.topBarH-10, 18, h);
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  // ---------------------------
-  // Visuals: Toilet pipe drawing
-  // ---------------------------
-  function drawToiletColumn(x, topY, h){
-    // Column body (pipe)
-    const w = TUNING.pipeW;
-
-    const left = x - w/2;
-    const right = x + w/2;
-
-    // white porcelain gradient
-    const g = ctx.createLinearGradient(left, 0, right, 0);
-    g.addColorStop(0, "rgba(255,255,255,0.92)");
-    g.addColorStop(0.35, "rgba(255,255,255,0.98)");
-    g.addColorStop(1, "rgba(235,235,235,0.92)");
-
-    ctx.fillStyle = g;
-    ctx.fillRect(left, topY, w, h);
-
-    // subtle edge shadow
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(left, topY, 2, h);
-    ctx.fillRect(right-2, topY, 2, h);
-    ctx.globalAlpha = 1;
-
-    // inner highlight stripe
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(left + w*0.18, topY+6, w*0.18, h-12);
-    ctx.globalAlpha = 1;
-  }
-
-  function drawToiletHead(x, y, isTop){
-    // "Toilet head" cap with tank + bowl look
-    const capW = TUNING.capW;
-    const capH = TUNING.capH;
-    const left = x - capW/2;
-
-    // porcelain gradient
-    const g = ctx.createLinearGradient(left, 0, left+capW, 0);
-    g.addColorStop(0, "rgba(250,250,250,0.92)");
-    g.addColorStop(0.5, "rgba(255,255,255,0.98)");
-    g.addColorStop(1, "rgba(235,235,235,0.92)");
-
-    // main block
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    roundRect(left, y, capW, capH, 14);
-    ctx.fill();
-
-    // bowl area
-    ctx.globalAlpha = 0.14;
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    roundRect(left+18, y+22, capW-36, capH-34, 18);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // water oval
-    ctx.fillStyle = "rgba(120,190,255,0.55)";
-    ctx.beginPath();
-    ctx.ellipse(x, y + capH*0.58, capW*0.20, capH*0.16, 0, 0, Math.PI*2);
-    ctx.fill();
-
-    // bolt
-    ctx.fillStyle = "rgba(0,0,0,0.12)";
-    ctx.beginPath();
-    ctx.arc(x, y + 18, 5, 0, Math.PI*2);
-    ctx.fill();
-
-    // tiny shadow
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(left, y + (isTop ? capH-2 : 0), capW, 2);
-    ctx.globalAlpha = 1;
-  }
-
-  function roundRect(x,y,w,h,r){
-    const rr = Math.min(r, w/2, h/2);
-    ctx.moveTo(x+rr, y);
-    ctx.arcTo(x+w, y, x+w, y+h, rr);
-    ctx.arcTo(x+w, y+h, x, y+h, rr);
-    ctx.arcTo(x, y+h, x, y, rr);
-    ctx.arcTo(x, y, x+w, y, rr);
-    ctx.closePath();
-  }
-
-  function drawPipes(){
-    for(const p of pipes){
-      const w = TUNING.pipeW;
-
-      // top column: 0 .. gapTop
-      drawToiletColumn(p.x, 0, p.gapTop);
-
-      // bottom column: gapBottom .. H
-      drawToiletColumn(p.x, p.gapBottom, H - p.gapBottom);
-
-      // caps (toilet heads) that extend into the gap
-      const topCapY = p.gapTop - (TUNING.capH - TUNING.capInset);
-      drawToiletHead(p.x, topCapY, true);
-
-      const bottomCapY = p.gapBottom - TUNING.capInset;
-      drawToiletHead(p.x, bottomCapY, false);
-    }
-  }
-
-  // ---------------------------
-  // Visuals: Butt bird + fart gas
-  // ---------------------------
-  function drawButt(){
-    // Emoji butt (peach) with slight tilt
-    ctx.save();
-    ctx.translate(bird.x, bird.y);
-    ctx.rotate(bird.rot);
-
-    ctx.font = `${Math.floor(bird.r*2.2)}px system-ui, Apple Color Emoji, Segoe UI Emoji`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("🍑", 0, 0);
-
-    ctx.restore();
-  }
-
-  function addPuff(){
-    // "gassy" puffs with velocity + fade
-    puffs.push({
-      x: bird.x - bird.r - 10,
-      y: bird.y + 6 + rand(-4,4),
-      t: performance.now(),
-      vx: -1.4 - Math.random()*0.8,
-      vy: (Math.random()-0.5)*0.55,
-      s: 12 + Math.random()*14,
+async function submitGlobalScore(name, score){
+  try{
+    await fetch(SHEETBEST_URL, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        name: (name || "anon").slice(0,16),
+        score,
+        created_at: new Date().toISOString()
+      })
     });
+    fetchGlobalBoard();
+  }catch(e){
+    // ignore
   }
+}
 
-  function drawPuffs(){
-    const now = performance.now();
-    for(let i=puffs.length-1; i>=0; i--){
-      const f = puffs[i];
-      const age = (now - f.t);
-      const life = 520; // ms
-      const k = age / life;
-      if(k >= 1){
-        puffs.splice(i,1);
-        continue;
-      }
-
-      // animate
-      f.x += f.vx * 1.6;
-      f.y += f.vy * 1.6;
-
-      const alpha = (1-k) * 0.38;
-      const size = f.s * (0.70 + k*0.95);
-
-      ctx.save();
-      ctx.globalAlpha = alpha;
-
-      // greenish gas
-      const grad = ctx.createRadialGradient(f.x, f.y, 2, f.x, f.y, size);
-      grad.addColorStop(0, "rgba(170,255,120,0.9)");
-      grad.addColorStop(0.55, "rgba(120,255,160,0.35)");
-      grad.addColorStop(1, "rgba(120,255,160,0.0)");
-
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.ellipse(f.x, f.y, size*1.05, size*0.80, 0.25, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.restore();
-    }
-    ctx.globalAlpha = 1;
+function getPlayerName(){
+  let n = localStorage.getItem(STORAGE.name);
+  if(!n){
+    n = prompt("Name for global leaderboard:", "anon") || "anon";
+    n = (n.trim() || "anon").slice(0,16);
+    localStorage.setItem(STORAGE.name, n);
   }
+  return n;
+}
 
-  function rand(a,b){ return a + Math.random()*(b-a); }
+// ---------- Canvas ----------
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
 
-  // ---------------------------
-  // UI drawing
-  // ---------------------------
-  function drawTopBar(){
-    ctx.save();
+// ---------- Audio (simple fart synth) ----------
+// ---------- Audio (simple fart synth) ----------
+let audioCtx = null;
 
-    // bar background
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.fillRect(0,0,W,UI.topBarH);
-
-    // score
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.font = "800 22px system-ui, -apple-system, Arial";
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "left";
-    ctx.fillText(`Score: ${score}`, 16, UI.topBarH/2);
-
-    // best
-    ctx.textAlign = "right";
-    ctx.font = "700 16px system-ui, -apple-system, Arial";
-    ctx.fillStyle = "rgba(255,255,255,0.80)";
-    ctx.fillText(`Best: ${getBest()}`, W - 16, UI.topBarH/2);
-
-    ctx.restore();
+function ensureAudio(){
+  if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if(audioCtx.state === "suspended"){
+    audioCtx.resume().catch(()=>{});
   }
+}
 
-  function drawCenterCard(lines){
-    const cardW = Math.min(W*0.86, 360);
-    const cardH = Math.min(H*0.46, 340);
-    const cardX = (W - cardW)/2;
-    const cardY = (H - cardH)/2 - 8;
+function fartSound(){
+  try{
+    ensureAudio();
 
-    // card
-    ctx.save();
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(10,20,14,0.78)";
-    ctx.beginPath();
-    roundRect(cardX, cardY, cardW, cardH, 22);
-    ctx.fill();
+    const t = audioCtx.currentTime;
 
-    // border
-    ctx.globalAlpha = 0.22;
-    ctx.strokeStyle = "rgba(255,255,255,0.55)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const filt = audioCtx.createBiquadFilter();
 
-    // title
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.font = "900 44px system-ui, -apple-system, Arial";
-    ctx.fillText(lines[0], W/2, cardY + 22);
+    osc.type = "square";
+    osc.frequency.setValueAtTime(160, t);
+    osc.frequency.exponentialRampToValueAtTime(55, t + 0.09);
 
-    // subtitle
-    ctx.font = "600 16px system-ui, -apple-system, Arial";
-    ctx.fillStyle = "rgba(255,255,255,0.82)";
-    ctx.fillText(lines[1], W/2, cardY + 78);
+    filt.type = "lowpass";
+    filt.frequency.setValueAtTime(900, t);
+    filt.frequency.exponentialRampToValueAtTime(180, t + 0.12);
 
-    // divider
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = "rgba(255,255,255,0.8)";
-    ctx.fillRect(cardX + 24, cardY + 112, cardW - 48, 1);
-    ctx.globalAlpha = 1;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
 
-    return { x: cardX, y: cardY, w: cardW, h: cardH };
-  }
+    osc.connect(filt);
+    filt.connect(gain);
+    gain.connect(audioCtx.destination);
 
-  function drawLocalLeaderboard(card){
-    const board = getBoard();
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "700 15px system-ui, -apple-system, Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText("Leaderboard (local)", W/2, card.y + 128);
+    osc.start(t);
+    osc.stop(t + 0.18);
+  }catch(e){}
+}
 
-    ctx.font = "600 15px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-    ctx.textAlign = "left";
+// ---------- Helpers ----------
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 
-    const left = card.x + 76;
-    const right = card.x + card.w - 76;
-    let y = card.y + 158;
+function circleRectCollides(cx, cy, cr, rx, ry, rw, rh){
+  const closestX = clamp(cx, rx, rx+rw);
+  const closestY = clamp(cy, ry, ry+rh);
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return (dx*dx + dy*dy) <= cr*cr;
+}
 
-    for(let i=0;i<5;i++){
-      const v = board[i] ?? "—";
-      ctx.fillStyle = "rgba(255,255,255,0.86)";
-      ctx.fillText(`${i+1}.`, left, y);
-      ctx.textAlign = "right";
-      ctx.fillText(String(v), right, y);
-      ctx.textAlign = "left";
-      y += 22;
-    }
-  }
+function roundRect(x,y,w,h,r,fill){
+  const rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr,y);
+  ctx.arcTo(x+w,y,x+w,y+h,rr);
+  ctx.arcTo(x+w,y+h,x,y+h,rr);
+  ctx.arcTo(x,y+h,x,y,rr);
+  ctx.arcTo(x,y,x+w,y,rr);
+  if(fill) ctx.fill();
+  else ctx.stroke();
+}
 
-  function drawGlobalLeaderboard(card){
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "700 15px system-ui, -apple-system, Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText("Leaderboard (global)", W/2, card.y + 128);
+// ---------- Local leaderboard ----------
+function getBest(){ return Number(localStorage.getItem(STORAGE.best) || 0); }
+function setBest(v){ localStorage.setItem(STORAGE.best, String(v)); }
 
-    ctx.font = "600 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-    const left = card.x + 52;
-    const right = card.x + card.w - 52;
-    let y = card.y + 158;
+function getBoard(){
+  try{
+    const a = JSON.parse(localStorage.getItem(STORAGE.board) || "[]");
+    return Array.isArray(a) ? a : [];
+  }catch{ return []; }
+}
+function setBoard(a){ localStorage.setItem(STORAGE.board, JSON.stringify(a)); }
 
-    if(globalBoardStatus === "loading"){
-      ctx.fillStyle = "rgba(255,255,255,0.80)";
-      ctx.textAlign = "center";
-      ctx.fillText("Loading...", W/2, y);
-      return;
-    }
-    if(globalBoardStatus === "error"){
-      ctx.fillStyle = "rgba(255,255,255,0.80)";
-      ctx.textAlign = "center";
-      ctx.fillText("Offline (showing local)", W/2, y);
-      return;
-    }
+function submitScore(v){
+  if(v > getBest()) setBest(v);
+  const board = getBoard();
+  board.push(v);
+  board.sort((a,b)=>b-a);
+  setBoard(board.slice(0,5));
+}
 
-    ctx.textAlign = "left";
-    for(let i=0;i<5;i++){
-      const row = globalBoard[i];
-      const name = row ? row.name : "—";
-      const val = row ? row.score : "—";
+// ---------- Game State ----------
+let state = "ready"; // ready | playing | dead
+let score = 0;
+let pipes = [];
+let puffs = [];
+let lastSpawn = 0;
+let lastPuff = 0;
 
-      ctx.fillStyle = "rgba(255,255,255,0.86)";
-      ctx.fillText(`${i+1}. ${name}`, left, y);
-      ctx.textAlign = "right";
-      ctx.fillText(String(val), right, y);
-      ctx.textAlign = "left";
-      y += 20;
-    }
-  }
+const bird = {
+  x: 145,
+  y: H*0.5,
+  r: 22,
+  v: 0
+};
 
-  function drawLeaderboard(card){
-    if(globalBoardStatus === "ready") drawGlobalLeaderboard(card);
-    else drawLocalLeaderboard(card);
-  }
+function reset(){
+  state = "ready";
+  score = 0;
+  pipes = [];
+  puffs = [];
+  bird.x = 145;
+  bird.y = H*0.5;
+  bird.v = 0;
+  lastSpawn = performance.now();
+  lastPuff = performance.now();
+}
 
-  // ---------------------------
-  // Audio (mobile-safe fart synth)
-  // ---------------------------
-  let audioCtx = null;
-
-  function fartSound(){
-    try {
-      if(!audioCtx){
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      // required for mobile
-      if(audioCtx.state === "suspended"){
-        audioCtx.resume().catch(()=>{});
-      }
-
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      const filt = audioCtx.createBiquadFilter();
-
-      const t = audioCtx.currentTime;
-
-      // slightly randomized "fart"
-      osc.type = "square";
-      const f0 = 170 + Math.random()*35;
-      osc.frequency.setValueAtTime(f0, t);
-      osc.frequency.exponentialRampToValueAtTime(58 + Math.random()*10, t + 0.09);
-
-      filt.type = "lowpass";
-      filt.frequency.setValueAtTime(720, t);
-      filt.frequency.exponentialRampToValueAtTime(240, t + 0.12);
-
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.55, t + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-
-      osc.connect(filt);
-      filt.connect(gain);
-      gain.connect(audioCtx.destination);
-
-      osc.start(t);
-      osc.stop(t + 0.2);
-
-    } catch(e) {}
-  }
-
-  // Extra mobile unlock: first touch resumes audio context
-  document.addEventListener("touchstart", () => {
-    try{
-      if(!audioCtx){
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if(audioCtx.state === "suspended"){
-        audioCtx.resume().catch(()=>{});
-      }
-    } catch(e){}
-  }, { once: true, passive: true });
-
-  // ---------------------------
-  // Game flow
-  // ---------------------------
-  function reset(){
-    state = "ready";
-    score = 0;
-    shake = 0;
-
-    bird.x = W * 0.30;
-    bird.y = H * 0.52;
-    bird.v = 0;
-    bird.rot = 0;
-
-    pipes = [];
-    puffs = [];
-    lastSpawn = performance.now();
-    puffFrame = 0;
-  }
-
-  function startPlaying(){
-    if(state === "playing") return;
+function startPlaying(){
+  if(state === "ready"){
     state = "playing";
     lastSpawn = performance.now();
-    // refresh global list at start
+    lastPuff = performance.now();
     fetchGlobalBoard();
   }
+}
 
-  function die(){
-    if(state === "dead") return;
+function die(){
+  if(state !== "dead"){
     state = "dead";
-    shake = TUNING.shakeOnDie;
+    submitScore(score);
+    submitGlobalScore(getPlayerName(), score);
+  }
+}
 
-    submitLocalScore(score);
+// ---------- Difficulty ----------
+function difficulty(){
+  const s = score;
+  const speed = clamp(TUNING.pipeSpeed + s*0.05, TUNING.pipeSpeed, TUNING.maxSpeed);
+  const gap = clamp(TUNING.gap - s*1.5, TUNING.minGap, TUNING.gap);
+  return { speed, gap };
+}
 
-    // submit global
-    const name = getPlayerName();
-    submitGlobalScore(name, score);
+// ---------- Pipes ----------
+function spawnPipe(now){
+  const gap = difficulty().gap;
+  const topMin = UI.topBarH + 90;
+  const bottomMin = 90;
+  const gapTop = Math.floor(topMin + Math.random() * (H - topMin - bottomMin - gap));
+  const gapBottom = gapTop + gap;
+
+  pipes.push({ x: W + 60, gapTop, gapBottom, scored:false });
+  lastSpawn = now;
+}
+
+// ---------- Puffs (YOUR EDIT TARGET ✅) ----------
+function addPuff(){
+  // Updated to look more like fart gas: bigger, faster, more chaotic
+  puffs.push({
+    x: bird.x - bird.r * 1.2,
+    y: bird.y + (Math.random()*8 - 4),
+    t: performance.now(),
+    vx: -2.2 - Math.random()*1.4,
+    vy: (Math.random()-0.5)*1.2,
+    s: 14 + Math.random()*18
+  });
+}
+
+function updatePuffs(now){
+  puffs = puffs.filter(p => (now - p.t) < TUNING.puffLife);
+  for(const p of puffs){
+    // drift + wobble = stink cloud feel
+    p.x += p.vx;
+    p.y += p.vy + Math.sin((now - p.t) * 0.02) * 0.35;
+    p.s *= 0.992;
+    p.vx *= 0.995;
+    p.vy *= 0.995;
+  }
+}
+
+// ---------- Update ----------
+function update(now){
+  if(state === "playing"){
+    bird.v += TUNING.gravity;
+    bird.y += bird.v;
+
+    if(now - lastPuff > TUNING.puffEvery){
+      addPuff();
+      lastPuff = now;
+    }
+
+    if(now - lastSpawn > TUNING.spawnEvery){
+      spawnPipe(now);
+    }
+
+    const speed = difficulty().speed;
+
+    for(const p of pipes){
+      p.x -= speed;
+
+      if(!p.scored && p.x + TUNING.pipeW/2 < bird.x){
+        score++;
+        p.scored = true;
+      }
+
+      const w = TUNING.pipeW;
+      const left = p.x - w/2;
+
+      // main columns
+      if(circleRectCollides(bird.x, bird.y, bird.r, left, 0, w, p.gapTop)) die();
+      if(circleRectCollides(bird.x, bird.y, bird.r, left, p.gapBottom, w, H - p.gapBottom)) die();
+
+      // cap hitboxes (toilet heads are solid too)
+      const capW = TUNING.capW;
+      const capH = TUNING.capH;
+      const capLeft = p.x - capW/2;
+
+      const topCapY = p.gapTop - (capH - TUNING.capInset);
+      if(circleRectCollides(bird.x, bird.y, bird.r, capLeft, topCapY, capW, capH)) die();
+
+      const bottomCapY = p.gapBottom - TUNING.capInset;
+      if(circleRectCollides(bird.x, bird.y, bird.r, capLeft, bottomCapY, capW, capH)) die();
+    }
+
+    pipes = pipes.filter(p => p.x > -160);
+
+    if(bird.y < -40 || bird.y > H + 40) die();
   }
 
-  function spawnPipe(){
-    const gap = TUNING.gap;
+  updatePuffs(now);
+}
 
-    const topMin = UI.topBarH + TUNING.safeTop;
-    const bottomMin = TUNING.safeBottom;
+// ---------- Input ----------
+function flapOrStartOrRestart(){
+  fartSound();
 
-    // choose a gap top within safe bounds
-    const maxGapTop = H - bottomMin - gap;
-    const gapTop = Math.floor(rand(topMin, maxGapTop));
-    const gapBottom = gapTop + gap;
-
-    pipes.push({
-      x: W + 80,
-      gapTop,
-      gapBottom,
-      scored: false,
-    });
+  if(state === "ready"){
+    startPlaying();
+    bird.v = TUNING.flapImpulse;
+    addPuff(); addPuff();
+    return;
   }
+  if(state === "dead"){
+    reset();
+    startPlaying();
+    bird.v = TUNING.flapImpulse;
+    addPuff(); addPuff();
+    return;
+  }
+  if(state === "playing"){
+    bird.v = TUNING.flapImpulse;
+    addPuff(); addPuff();
+  }
+}
 
-  function update(dtMs){
-    const dt = dtMs / 16.6667;
+document.addEventListener("keydown", (e) => {
+  if(e.code === "Space") flapOrStartOrRestart();
+});
+canvas.addEventListener("mousedown", flapOrStartOrRestart);
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  flapOrStartOrRestart();
+}, { passive:false });
+// Mobile audio unlock (iOS Safari needs this)
+document.addEventListener("touchstart", () => {
+  ensureAudio();
+}, { once:true, passive:true });
 
-    // camera shake
-    if(shake > 0) shake = Math.max(0, shake - 0.35*dt);
+// ---------- Draw ----------
+function drawSewerBackground(){
+  ctx.fillStyle = "#102018";
+  ctx.fillRect(0,0,W,H);
 
-    if(state === "playing"){
-      // bird physics
-      bird.v += TUNING.gravity * dt;
-      bird.y += bird.v * dt;
-
-      // rotate with velocity
-      bird.rot = clamp(bird.v / 18, -0.45, 0.75);
-
-      // spawn pipes
-      const now = performance.now();
-      if(now - lastSpawn >= TUNING.spawnEvery){
-        spawnPipe();
-        lastSpawn = now;
-      }
-
-      // move pipes
-      for(const p of pipes){
-        p.x -= TUNING.speed * dt * 3.0;
-        if(!p.scored && p.x + TUNING.pipeW/2 < bird.x){
-          p.scored = true;
-          score++;
-        }
-      }
-      // cleanup
-      pipes = pipes.filter(p => p.x > -160);
-
-      // collisions
-      for(const p of pipes){
-        const w = TUNING.pipeW;
-        const left = p.x - w/2;
-
-        // main columns
-        if(circleRectCollides(bird.x, bird.y, bird.r, left, 0, w, p.gapTop)) die();
-        if(circleRectCollides(bird.x, bird.y, bird.r, left, p.gapBottom, w, H - p.gapBottom)) die();
-
-        // cap hitboxes (toilet heads)
-        const capW = TUNING.capW;
-        const capH = TUNING.capH;
-        const capLeft = p.x - capW/2;
-
-        // top cap sits at bottom of top column and extends into the gap
-        const topCapY = p.gapTop - (capH - TUNING.capInset);
-        if(circleRectCollides(bird.x, bird.y, bird.r, capLeft, topCapY, capW, capH)) die();
-
-        // bottom cap sits at top of bottom column and extends into the gap
-        const bottomCapY = p.gapBottom - TUNING.capInset;
-        if(circleRectCollides(bird.x, bird.y, bird.r, capLeft, bottomCapY, capW, capH)) die();
-      }
-
-      // bounds
-      if(bird.y < -40 || bird.y > H + 40) die();
+  // bricks
+  const brickW = 62;
+  const brickH = 32;
+  ctx.globalAlpha = 0.30;
+  for(let y=0;y<H;y+=brickH){
+    const offset = (Math.floor(y/brickH)%2) * (brickW/2);
+    for(let x=-offset;x<W;x+=brickW){
+      ctx.fillStyle = "#0b1510";
+      ctx.fillRect(x+1, y+1, brickW-3, brickH-3);
     }
   }
+  ctx.globalAlpha = 1;
 
-  function draw(){
-    // shake translate
-    let sx = 0, sy = 0;
-    if(shake > 0){
-      sx = (Math.random()-0.5)*shake*2;
-      sy = (Math.random()-0.5)*shake*2;
-    }
+  // slime drips
+  ctx.globalAlpha = 0.20;
+  for(let i=0;i<5;i++){
+    const x = (i*47) % W;
+    const h = 40 + (i*13)%90;
+    ctx.fillStyle = "#4ea66a";
+    ctx.fillRect(x, UI.topBarH, 12, h);
+  }
+  ctx.globalAlpha = 1;
+
+  // vignette
+  const g = ctx.createRadialGradient(W/2,H/2,100,W/2,H/2,520);
+  g.addColorStop(0,"rgba(0,0,0,0)");
+  g.addColorStop(1,"rgba(0,0,0,0.55)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+}
+
+function drawTopBar(){
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(0,0,W,UI.topBarH);
+
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.font = "20px system-ui,-apple-system,Arial";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score: ${score}`, 16, UI.topBarH/2);
+
+  ctx.textAlign = "right";
+  ctx.fillText(`Best: ${getBest()}`, W-16, UI.topBarH/2);
+}
+
+function drawToiletColumn(xCenter, topY, height){
+  const w = TUNING.pipeW;
+  const left = xCenter - w/2;
+
+  const grad = ctx.createLinearGradient(left,0,left+w,0);
+  grad.addColorStop(0,"#f7f7f7");
+  grad.addColorStop(0.5,"#ffffff");
+  grad.addColorStop(1,"#ececec");
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(left, topY, w, height);
+
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(left, topY, 2, height);
+  ctx.fillRect(left+w-2, topY, 2, height);
+  ctx.globalAlpha = 1;
+}
+
+function drawToiletHead(xCenter, yTop, isTop){
+  const w = TUNING.capW;
+  const h = TUNING.capH;
+  const left = xCenter - w/2;
+
+  ctx.fillStyle = "#f9f9f9";
+  roundRect(left, yTop, w, h, 14, true);
+
+  ctx.fillStyle = "#cfe6ff";
+  roundRect(left + w*0.30, yTop + h*0.42, w*0.40, h*0.38, 12, true);
+
+  ctx.globalAlpha = 0.20;
+  ctx.fillStyle = "#000";
+  roundRect(left + w*0.18, yTop + h*0.12, w*0.64, h*0.18, 10, true);
+  ctx.globalAlpha = 1;
+
+  ctx.globalAlpha = 0.20;
+  ctx.fillStyle = "#000";
+  if(isTop){
+    roundRect(left+8, yTop+h-10, w-16, 10, 8, true);
+  }else{
+    roundRect(left+8, yTop, w-16, 10, 8, true);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPipes(){
+  for(const p of pipes){
+    drawToiletColumn(p.x, 0, p.gapTop);
+    drawToiletColumn(p.x, p.gapBottom, H - p.gapBottom);
+
+    const topCapY = p.gapTop - (TUNING.capH - TUNING.capInset);
+    drawToiletHead(p.x, topCapY, true);
+
+    const bottomCapY = p.gapBottom - TUNING.capInset;
+    drawToiletHead(p.x, bottomCapY, false);
+  }
+}
+
+// ✅ New fart-gas look (green stink clouds, lumpy blobs)
+function drawPuffs(){
+  const now = performance.now();
+
+  for(const p of puffs){
+    const age = now - p.t;
+    const a = 1 - (age / TUNING.puffLife);
+    const alpha = Math.max(0, a);
 
     ctx.save();
-    ctx.translate(sx, sy);
+    ctx.globalAlpha = alpha * 0.9;
 
-    drawSewerBackground();
-    drawPipes();
-    drawPuffs();
-    drawButt();
-    drawTopBar();
+    const wob = Math.sin(age * 0.02) * 2;
 
-    // overlays
-    if(state === "ready"){
-      const card = drawCenterCard(["FLAPPY FART", "Tap / Click / Space to start"]);
-      ctx.globalAlpha = 0.92;
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.font = "700 16px system-ui, -apple-system, Arial";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillText("Try not to bonk the toilets.", W/2, card.y + card.h - 52);
-      ctx.globalAlpha = 1;
-    }
+    // green stink gradient
+    const g = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.s * 1.6);
+    g.addColorStop(0, "#d4ff6a");
+    g.addColorStop(0.55, "#9be23a");
+    g.addColorStop(1, "#4f7f1a");
 
-    if(state === "dead"){
-      const card = drawCenterCard(["GAME OVER", "Tap / Click / Space to restart"]);
-      ctx.fillStyle = "rgba(255,255,255,0.90)";
-      ctx.font = "800 18px system-ui, -apple-system, Arial";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillText(`Final Score: ${score}`, W/2, card.y + 100);
+    ctx.fillStyle = g;
 
-      drawLeaderboard(card);
-    }
+    // lumpy cloud
+    ctx.beginPath();
+    ctx.arc(p.x - p.s*0.35, p.y + wob, p.s*0.55, 0, Math.PI*2);
+    ctx.arc(p.x + p.s*0.35, p.y - wob, p.s*0.65, 0, Math.PI*2);
+    ctx.arc(p.x, p.y, p.s*0.70, 0, Math.PI*2);
+    ctx.fill();
+
+    // darker stink spot
+    ctx.globalAlpha = alpha * 0.35;
+    ctx.fillStyle = "#2f4a0f";
+    ctx.beginPath();
+    ctx.arc(p.x + p.s*0.15, p.y + 2, p.s*0.18, 0, Math.PI*2);
+    ctx.fill();
 
     ctx.restore();
   }
+}
 
-  function loop(now){
-    const dt = Math.min(40, now - lastFrameTime);
-    lastFrameTime = now;
-    update(dt);
-    draw();
-    requestAnimationFrame(loop);
+// ✅ Butt bird
+function drawBird(){
+  ctx.save();
+  ctx.translate(bird.x, bird.y);
+
+  const ang = clamp(bird.v / 12, -0.6, 0.6);
+  ctx.rotate(ang);
+
+  const r = bird.r;
+
+  // cheeks gradients
+  const gradL = ctx.createRadialGradient(-r*0.4, -r*0.3, 2, -r*0.2, 0, r);
+  gradL.addColorStop(0, "#ffc78f");
+  gradL.addColorStop(1, "#ff9e5e");
+
+  const gradR = ctx.createRadialGradient(r*0.4, -r*0.3, 2, r*0.2, 0, r);
+  gradR.addColorStop(0, "#ffc78f");
+  gradR.addColorStop(1, "#ff9e5e");
+
+  // left cheek
+  ctx.fillStyle = gradL;
+  ctx.beginPath();
+  ctx.arc(-r*0.35, 0, r*0.95, 0, Math.PI*2);
+  ctx.fill();
+
+  // right cheek
+  ctx.fillStyle = gradR;
+  ctx.beginPath();
+  ctx.arc(r*0.35, 0, r*0.95, 0, Math.PI*2);
+  ctx.fill();
+
+  // center blend
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = "#ffb07a";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r*0.9, r*0.8, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // crack
+  ctx.strokeStyle = "rgba(120,40,0,0.45)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -r*0.9);
+  ctx.quadraticCurveTo(2, 0, 0, r*0.9);
+  ctx.stroke();
+
+  // highlight
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(-r*0.55, -r*0.35, r*0.25, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+function drawOverlayCard(){
+  const card = { w:UI.cardW, h:UI.cardH, x:(W-UI.cardW)/2, y:170 };
+
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(card.x, card.y, card.w, card.h, UI.cardR, true);
+
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  const title = (state === "dead") ? "GAME OVER" : "FLAPPY FART";
+  ctx.font = "44px system-ui,-apple-system,Arial";
+  ctx.fillText(title, W/2, card.y + 28);
+
+  ctx.font = "18px system-ui,-apple-system,Arial";
+  const hint = (state === "dead") ? "Click / Tap / Space to restart" : "Click / Tap / Space to start";
+  ctx.fillText(hint, W/2, card.y + 92);
+
+  ctx.font = "20px system-ui,-apple-system,Arial";
+  const sLine = (state === "dead") ? `Final Score: ${score}` : `Best: ${getBest()}`;
+  ctx.fillText(sLine, W/2, card.y + 120);
+
+  drawLeaderboard(card);
+}
+
+function drawLocalLeaderboard(card){
+  const board = getBoard();
+
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.font = "16px system-ui,-apple-system,Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("Leaderboard (local)", W/2, card.y + 154);
+
+  ctx.font = "18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+  ctx.textAlign = "left";
+
+  const left = card.x + 92;
+  const right = card.x + card.w - 92;
+  let y = card.y + 182;
+
+  for(let i=0;i<5;i++){
+    const v = board[i] ?? "—";
+    ctx.fillText(`${i+1}.`, left, y);
+    ctx.textAlign = "right";
+    ctx.fillText(String(v), right, y);
+    ctx.textAlign = "left";
+    y += 22;
+  }
+}
+
+function drawGlobalLeaderboard(card){
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "16px system-ui,-apple-system,Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("Global Leaderboard", W/2, card.y + 154);
+
+  const left = card.x + 70;
+  const right = card.x + card.w - 70;
+  let y = card.y + 182;
+
+  ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+
+  if(globalBoardStatus === "loading"){
+    ctx.fillText("Loading…", W/2, y);
+    return;
+  }
+  if(globalBoardStatus === "error"){
+    ctx.fillText("Offline (showing local)", W/2, y);
+    return;
   }
 
-  // ---------------------------
-  // Input
-  // ---------------------------
-  function flapOrStartOrRestart(){
-    // Sound must happen inside user gesture for mobile
-    fartSound();
+  ctx.textAlign = "left";
+  for(let i=0;i<10;i++){
+    const row = globalBoard[i];
+    const name = row ? row.name : "—";
+    const val = row ? row.score : "—";
 
-    if(state === "ready"){
-      startPlaying();
-      bird.v = TUNING.flapImpulse;
-      // add a few puffs on start
-      for(let i=0;i<3;i++) addPuff();
-      return;
-    }
-    if(state === "dead"){
-      reset();
-      startPlaying();
-      bird.v = TUNING.flapImpulse;
-      for(let i=0;i<3;i++) addPuff();
-      return;
-    }
-    // playing
-    bird.v = TUNING.flapImpulse;
-
-    // puff burst
-    puffFrame = 0;
-    for(let i=0;i<2;i++) addPuff();
+    ctx.fillText(`${i+1}. ${name}`, left, y);
+    ctx.textAlign = "right";
+    ctx.fillText(String(val), right, y);
+    ctx.textAlign = "left";
+    y += 20;
   }
+}
 
-  document.addEventListener("keydown", (e) => {
-    if(e.code === "Space"){
-      e.preventDefault();
-      flapOrStartOrRestart();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    flapOrStartOrRestart();
-  });
-
-  canvas.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    flapOrStartOrRestart();
-  }, { passive: false });
-
-  // Emit puffs while the bird is moving up (for extra gassy feel)
-  function puffTicker(){
-    if(state === "playing" && bird.v < -1.4){
-      puffFrame++;
-      if(puffFrame % TUNING.puffEvery === 0) addPuff();
-    }
-    requestAnimationFrame(puffTicker);
+function drawLeaderboard(card){
+  if(globalBoardStatus === "ready"){
+    drawGlobalLeaderboard(card);
+  }else{
+    drawLocalLeaderboard(card);
   }
+}
 
-  // ---------------------------
-  // Start
-  // ---------------------------
-  reset();
-  fetchGlobalBoard();
-  loop(performance.now());
-  puffTicker();
-})();
+function draw(){
+  drawSewerBackground();
+  drawPipes();
+  drawPuffs();
+  drawBird();
+  drawTopBar();
+
+  if(state === "ready" || state === "dead"){
+    drawOverlayCard();
+  }
+}
+
+// ---------- Main loop ----------
+function loop(t){
+  update(t);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ---------- Start ----------
+reset();
+fetchGlobalBoard();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
