@@ -65,6 +65,54 @@
     best: "flappyfart_best_v2",
     board: "flappyfart_board_v2",
   };
+  // ===== GLOBAL LEADERBOARD (SheetBest) =====
+const SHEETBEST_URL = "https://api.sheetbest.com/sheets/0815363c-4408-4c6f-a17f-5be927d638de";
+
+let globalBoard = [];
+let globalBoardStatus = "loading";
+
+async function fetchGlobalBoard() {
+  globalBoardStatus = "loading";
+  try {
+    const res = await fetch(SHEETBEST_URL);
+    const rows = await res.json();
+
+    globalBoard = rows
+      .map(r => ({ name: r.name || "anon", score: Number(r.score || 0) }))
+      .filter(r => Number.isFinite(r.score))
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,10);
+
+    globalBoardStatus = "ready";
+  } catch {
+    globalBoardStatus = "error";
+  }
+}
+
+async function submitGlobalScore(name, score) {
+  try {
+    await fetch(SHEETBEST_URL, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        name: (name || "anon").slice(0,16),
+        score,
+        created_at: new Date().toISOString()
+      })
+    });
+    fetchGlobalBoard();
+  } catch {}
+}
+
+function getPlayerName() {
+  let n = localStorage.getItem("ff_name");
+  if (!n) {
+    n = prompt("Name for global leaderboard:", "anon") || "anon";
+    localStorage.setItem("ff_name", n.slice(0,16));
+  }
+  return n;
+}
+
 
   // -----------------------
   // State
@@ -188,6 +236,7 @@
     if (state !== "dead") {
       state = "dead";
       submitScore(score);
+      submitGlobalScore(getPlayerName(), score);
     }
   }
 
@@ -412,7 +461,7 @@
     return { x, y, w: cardW, h: cardH };
   }
 
-  function drawLeaderboard(card) {
+  function drawLocalLeaderboard(card) {
     const board = getBoard();
 
     ctx.fillStyle = "rgba(255,255,255,0.92)";
@@ -437,7 +486,48 @@
       ctx.textAlign = "left";
       y += 22;
     }
+  function drawGlobalLeaderboard(card) {
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "16px system-ui, -apple-system, Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("Global Leaderboard", W/2, card.y + 154);
+
+  const left = card.x + 70;
+  const right = card.x + card.w - 70;
+  let y = card.y + 182;
+
+  ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+
+  if (globalBoardStatus === "loading") {
+    ctx.fillText("Loading…", W/2, y);
+    return;
   }
+  if (globalBoardStatus === "error") {
+    ctx.fillText("Offline (showing local)", W/2, y);
+    return;
+  }
+
+  ctx.textAlign = "left";
+  for (let i = 0; i < 10; i++) {
+    const row = globalBoard[i];
+    const name = row ? row.name : "—";
+    const val = row ? row.score : "—";
+
+    ctx.fillText(`${i+1}. ${name}`, left, y);
+    ctx.textAlign = "right";
+    ctx.fillText(String(val), right, y);
+    ctx.textAlign = "left";
+    y += 20;
+  }
+function drawLeaderboard(card) {
+  if (globalBoardStatus === "ready") {
+    drawGlobalLeaderboard(card);
+  } else {
+    drawLocalLeaderboard(card);
+  }
+}
+
 
   // -----------------------
   // Update / Draw Loop
@@ -482,7 +572,7 @@
       const left = p.x - w/2;
 
       // main pipe columns
-      if (circleRectCollides(bird.x, bird.y, bird.r, left, 0, w, p.gapTop)) die();
+      if (circleRectCollides(bird.x, bird.y, bird.r, left, 0, w, p.gapTop + 10)) die();
       if (circleRectCollides(bird.x, bird.y, bird.r, left, p.gapBottom, w, H - p.gapBottom)) die();
 
       // cap hitboxes (toilet heads are solid too)
@@ -560,6 +650,7 @@
 
   // Start
   reset();
+  fetchGlobalBoard();
   loop();
 })();
 </script>
